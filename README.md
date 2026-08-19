@@ -18,30 +18,46 @@ urbansense-api/
 │   ├── model.py     # carregamento do modelo YOLO (singleton)
 │   └── schemas.py   # modelos de resposta (Pydantic)
 ├── best.pt           # pesos do modelo YOLO11 (classes: Trash, pothole)
-├── requirements.txt
-└── .venv/            # ambiente virtual Python (já criado)
+└── requirements.txt
 ```
 
 ## Pré-requisitos
 
 - Python 3.12+
-- Windows (comandos abaixo em PowerShell)
 
 ## Inicializando o projeto
 
-O ambiente virtual `.venv` já está criado com as dependências instaladas. Caso precise recriar do zero:
+Clone o repositório e entre na pasta do projeto:
 
+```bash
+git clone git@github.com:HenriqueDiass/urbansense-api.git
+cd urbansense-api
+```
+
+Crie o ambiente virtual e instale as dependências:
+
+**Windows (PowerShell)**
 ```powershell
-cd C:\Users\carlo\Desktop\urbansense-api\urbansense-api
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
+**Linux / macOS**
+```bash
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
 ## Rodando o servidor
 
+**Windows (PowerShell)**
 ```powershell
-cd C:\Users\carlo\Desktop\urbansense-api\urbansense-api
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```
+
+**Linux / macOS**
+```bash
+./.venv/bin/python -m uvicorn app.main:app --reload
 ```
 
 O servidor sobe em `http://127.0.0.1:8000`. A documentação interativa (Swagger) fica disponível em `http://127.0.0.1:8000/docs`.
