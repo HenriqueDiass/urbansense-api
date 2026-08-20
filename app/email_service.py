@@ -10,6 +10,7 @@ import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape as _escape
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -20,8 +21,24 @@ GREEN_DEEP = "#295C33"
 GREEN_ACTION = "#37703F"
 GREEN_SOFT_BG = "#E6F1E1"
 TEXT_MUTED = "#5B6B5E"
+TEXT_DARK = "#1A1A1A"
+
+# System-font stack, not a web font: Gmail, Outlook and most mail clients strip <link>/@font-face,
+# so a custom font silently falls back to Times New Roman there. This stack instead resolves to
+# each platform's own modern UI face — San Francisco on iOS/macOS Mail, Segoe UI on Outlook/Windows,
+# Roboto on Gmail/Android — which is what makes transactional e-mail look "designed" rather than
+# hand-typed, without depending on anything the client might block.
+FONT_STACK = (
+    "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif"
+)
 
 REPORT_PHOTO_CID = "report-photo"
+LOGO_CID = "urbansense-logo"
+LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo.png"
+
+
+def _logo_base64() -> str:
+    return base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
 
 
 @dataclass
@@ -58,8 +75,8 @@ def _format_timestamp(iso_timestamp: Optional[str]) -> str:
 def _metadata_row(label: str, value: str) -> str:
     return f"""
         <tr>
-          <td style="padding:7px 0;font-size:13px;color:{TEXT_MUTED};width:150px;border-bottom:1px solid #EEF3ED;">{_escape(label)}</td>
-          <td style="padding:7px 0;font-size:13px;color:#1E2A20;font-weight:bold;border-bottom:1px solid #EEF3ED;">{_escape(value)}</td>
+          <td style="padding:8px 0;font-size:13px;color:{TEXT_MUTED};width:150px;border-bottom:1px solid #EEF2ED;">{_escape(label)}</td>
+          <td style="padding:8px 0;font-size:13px;color:{TEXT_DARK};font-weight:600;border-bottom:1px solid #EEF2ED;">{_escape(value)}</td>
         </tr>
     """
 
@@ -84,40 +101,48 @@ def build_html(data: ReportEmailData) -> str:
     return f"""
         <!doctype html>
         <html lang="pt-BR">
-        <body style="margin:0;padding:0;background:#F2F6F1;font-family:Helvetica,Arial,sans-serif;">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F6F1;padding:24px 0;">
+        <body style="margin:0;padding:0;background:#EEF2ED;font-family:{FONT_STACK};-webkit-font-smoothing:antialiased;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#EEF2ED;padding:32px 0;">
             <tr><td align="center">
-              <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E1EAE0;">
+              <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border-radius:14px;overflow:hidden;box-shadow:0 1px 3px rgba(20,38,26,0.08);">
 
                 <tr>
-                  <td style="background:{GREEN_DEEP};padding:24px 28px;">
-                    <span style="color:#FFFFFF;font-size:20px;font-weight:bold;letter-spacing:0.3px;">UrbanSense AI</span><br/>
-                    <span style="color:#CFE3CC;font-size:13px;">Monitoramento urbano via Meta Ray-Ban</span>
+                  <td style="background:{GREEN_DEEP};padding:28px 32px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+                      <td style="vertical-align:middle;padding-right:12px;">
+                        <img src="cid:{LOGO_CID}" width="40" height="40" alt="UrbanSense AI"
+                             style="display:block;border-radius:9px;" />
+                      </td>
+                      <td style="vertical-align:middle;">
+                        <span style="color:#FFFFFF;font-size:18px;font-weight:600;letter-spacing:-0.2px;">UrbanSense AI</span><br/>
+                        <span style="color:#B9D4B2;font-size:12.5px;letter-spacing:0.1px;">Monitoramento urbano via Meta Ray-Ban</span>
+                      </td>
+                    </tr></table>
                   </td>
                 </tr>
 
                 <tr>
-                  <td style="padding:24px 28px 8px 28px;">
-                    <span style="display:inline-block;background:{GREEN_SOFT_BG};color:{GREEN_ACTION};font-size:12px;font-weight:bold;padding:6px 12px;border-radius:999px;">
+                  <td style="padding:28px 32px 8px 32px;">
+                    <span style="display:inline-block;background:{GREEN_SOFT_BG};color:{GREEN_ACTION};font-size:11px;font-weight:600;letter-spacing:0.4px;padding:5px 11px;border-radius:6px;text-transform:uppercase;">
                       {_escape(badge_label)}
                     </span>
-                    <h1 style="margin:14px 0 4px 0;font-size:19px;color:#1E2A20;">Nova ocorrência registrada por um cidadão</h1>
-                    <p style="margin:0;font-size:14px;color:{TEXT_MUTED};line-height:1.5;">
+                    <h1 style="margin:16px 0 6px 0;font-size:20px;font-weight:600;letter-spacing:-0.3px;color:{TEXT_DARK};">Nova ocorrência registrada por um cidadão</h1>
+                    <p style="margin:0;font-size:14px;color:{TEXT_MUTED};line-height:1.6;">
                       Um usuário do aplicativo UrbanSense AI flagrou e enviou o registro abaixo à
-                      <b>{_escape(data.city_hall_name)}</b> para providências.
+                      <b style="color:{TEXT_DARK};">{_escape(data.city_hall_name)}</b> para providências.
                     </p>
                   </td>
                 </tr>
 
                 <tr>
-                  <td style="padding:12px 28px;">
+                  <td style="padding:16px 32px;">
                     <img src="cid:{REPORT_PHOTO_CID}" alt="Foto da ocorrência"
-                         width="504" style="width:100%;max-width:504px;border-radius:12px;border:1px solid #E1EAE0;display:block;" />
+                         width="496" style="width:100%;max-width:496px;border-radius:10px;border:1px solid #E5EAE3;display:block;" />
                   </td>
                 </tr>
 
                 <tr>
-                  <td style="padding:8px 28px 24px 28px;">
+                  <td style="padding:8px 32px 28px 32px;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                       {detection_row}
                       {_metadata_row("Data e hora", when_text)}
@@ -127,17 +152,17 @@ def build_html(data: ReportEmailData) -> str:
                       {_metadata_row("Dispositivo", data.device_id or "—")}
                       {_metadata_row("ID do registro", data.report_id)}
                     </table>
-                    <a href="{maps_url}" style="display:inline-block;margin-top:16px;background:{GREEN_ACTION};color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:bold;padding:12px 20px;border-radius:10px;">
-                      Ver localização no mapa
+                    <a href="{maps_url}" style="display:inline-block;margin-top:20px;background:{GREEN_ACTION};color:#FFFFFF;text-decoration:none;font-size:14px;font-weight:600;padding:12px 22px;border-radius:8px;letter-spacing:0.1px;">
+                      Ver localização no mapa →
                     </a>
                   </td>
                 </tr>
 
                 <tr>
-                  <td style="background:{GREEN_SOFT_BG};padding:16px 28px;">
-                    <p style="margin:0;font-size:12px;color:{GREEN_ACTION};line-height:1.5;">
-                      E-mail gerado automaticamente pelo UrbanSense AI a partir de uma ocorrência capturada em campo.
-                      Não é necessário responder a esta mensagem.
+                  <td style="background:#FAFBF9;padding:18px 32px;border-top:1px solid #EEF2ED;">
+                    <p style="margin:0;font-size:12px;color:{TEXT_MUTED};line-height:1.6;">
+                      E-mail gerado automaticamente pelo <b style="color:{GREEN_ACTION};">UrbanSense AI</b> a partir de uma
+                      ocorrência capturada em campo. Não é necessário responder a esta mensagem.
                     </p>
                   </td>
                 </tr>
@@ -176,7 +201,14 @@ def send_report_email(
                 "type": "image/jpeg",
                 "disposition": "inline",
                 "content_id": REPORT_PHOTO_CID,
-            }
+            },
+            {
+                "content": _logo_base64(),
+                "filename": "urbansense-logo.png",
+                "type": "image/png",
+                "disposition": "inline",
+                "content_id": LOGO_CID,
+            },
         ],
     }
 
