@@ -82,8 +82,8 @@ async def process_report(
     trigger_label = "Captura automática" if (trigger_type and trigger_type.upper() == "AUTOMATIC") else "Captura manual"
     recipient = to_email or config.DEFAULT_CITY_HALL_EMAIL
 
-    # E-mail notification dispatch if Mailtrap token is configured
-    if config.MAILTRAP_API_TOKEN and recipient:
+    # E-mail notification dispatch if Mailtrap (SMTP sandbox or Sending API) is configured
+    if config.EMAIL_CONFIGURED and recipient:
         email_data = ReportEmailData(
             report_id=report_id,
             latitude=latitude or 0.0,

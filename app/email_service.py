@@ -7,8 +7,12 @@ device. Here it only ever lives in this process's environment.
 from __future__ import annotations
 
 import base64
+import smtplib
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from html import escape as _escape
 from pathlib import Path
 from typing import Optional
@@ -175,19 +179,42 @@ def build_html(data: ReportEmailData) -> str:
     """
 
 
-def send_report_email(
-    data: ReportEmailData,
-    to_email: str,
-    image_bytes: bytes,
-    image_filename: str = "ocorrencia.jpg",
-) -> EmailResult:
-    if not config.MAILTRAP_API_TOKEN or not to_email:
-        return EmailResult(
-            success=False,
-            status_code=-1,
-            message="Token do Mailtrap ou e-mail de destino não configurado no servidor",
-        )
+def _send_via_smtp_sandbox(data: ReportEmailData, to_email: str, image_bytes: bytes, image_filename: str) -> EmailResult:
+    """Email Testing (Sandbox): nothing leaves Mailtrap for real — the message just shows up in
+    the Testing inbox in the dashboard. Good for checking the HTML render without risking a real
+    send to the city hall."""
+    msg = MIMEMultipart("related")
+    msg["Subject"] = build_subject(data)
+    msg["From"] = f"{config.MAILTRAP_SENDER_NAME} <{config.MAILTRAP_SENDER_EMAIL}>"
+    msg["To"] = to_email
 
+    msg.attach(MIMEText(build_html(data), "html", "utf-8"))
+
+    photo_part = MIMEImage(image_bytes, name=image_filename)
+    photo_part.add_header("Content-ID", f"<{REPORT_PHOTO_CID}>")
+    photo_part.add_header("Content-Disposition", "inline", filename=image_filename)
+    msg.attach(photo_part)
+
+    logo_bytes = base64.b64decode(_logo_base64())
+    logo_part = MIMEImage(logo_bytes, name="urbansense-logo.png")
+    logo_part.add_header("Content-ID", f"<{LOGO_CID}>")
+    logo_part.add_header("Content-Disposition", "inline", filename="urbansense-logo.png")
+    msg.attach(logo_part)
+
+    try:
+        with smtplib.SMTP(config.MAILTRAP_SMTP_HOST, config.MAILTRAP_SMTP_PORT, timeout=20) as server:
+            server.starttls()
+            server.login(config.MAILTRAP_SMTP_USERNAME, config.MAILTRAP_SMTP_PASSWORD)
+            server.sendmail(config.MAILTRAP_SENDER_EMAIL, [to_email], msg.as_string())
+        return EmailResult(success=True, status_code=200, message=None)
+    except smtplib.SMTPException as exc:
+        return EmailResult(success=False, status_code=-1, message=str(exc))
+    except OSError as exc:
+        # e.g. connection refused/timeout reaching the SMTP host
+        return EmailResult(success=False, status_code=-1, message=str(exc))
+
+
+def _send_via_sending_api(data: ReportEmailData, to_email: str, image_bytes: bytes, image_filename: str) -> EmailResult:
     payload = {
         "from": {"email": config.MAILTRAP_SENDER_EMAIL, "name": config.MAILTRAP_SENDER_NAME},
         "to": [{"email": to_email}],
@@ -226,6 +253,30 @@ def send_report_email(
         )
     except requests.RequestException as exc:
         return EmailResult(success=False, status_code=-1, message=str(exc))
+
+
+def send_report_email(
+    data: ReportEmailData,
+    to_email: str,
+    image_bytes: bytes,
+    image_filename: str = "ocorrencia.jpg",
+) -> EmailResult:
+    if not to_email:
+        return EmailResult(success=False, status_code=-1, message="E-mail de destino não informado")
+
+    # Sandbox SMTP takes priority when configured — it's the safe path for demos/testing (never
+    # delivers for real). Falls back to the Sending API for production if SMTP isn't set up.
+    if config.MAILTRAP_SMTP_USERNAME and config.MAILTRAP_SMTP_PASSWORD:
+        return _send_via_smtp_sandbox(data, to_email, image_bytes, image_filename)
+
+    if config.MAILTRAP_API_TOKEN:
+        return _send_via_sending_api(data, to_email, image_bytes, image_filename)
+
+    return EmailResult(
+        success=False,
+        status_code=-1,
+        message="Nem SMTP sandbox nem token do Mailtrap Sending configurados no servidor",
+    )
 
 
 def utc_now_iso() -> str:
