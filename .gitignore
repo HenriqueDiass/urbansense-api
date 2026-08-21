@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 .env
+
+# execução local
+uvicorn.out.log
+uvicorn.err.log
