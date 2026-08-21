@@ -1,0 +1,272 @@
+{
+  "project": {
+    "name": "urbansense-api",
+    "description": "API em FastAPI que recebe uma foto (ex: capturada por um app Android/Meta Ray-Ban) e detecta lixo e buracos usando um modelo YOLO11 customizado; a rota /report tambem notifica a prefeitura por e-mail com a foto e a localizacao GPS da ocorrencia.",
+    "repository": "git@github.com:HenriqueDiass/urbansense-api.git",
+    "branch": "main",
+    "language": "Python",
+    "python_version": "3.12",
+    "api_version": "1.1.0"
+  },
+  "model": {
+    "file": "best.pt",
+    "architecture": "YOLO11n (Ultralytics)",
+    "base_config": "yolo11n.yaml",
+    "pretrained_from": "yolo11n.pt",
+    "task": "object detection",
+    "classes": {
+      "0": "Trash",
+      "1": "pothole"
+    },
+    "framework": "ultralytics (torch backend)",
+    "file_format": "PyTorch zip-serialized checkpoint (pickle + tensor storages)",
+    "known_issue_fixed": {
+      "problem": "O arquivo best.pt original estava descompactado em uma pasta (conteudo interno do zip exposto: data.pkl, data/, byteorder, version, .format_version, .storage_alignment, .data/serialization_id) em vez de ser um unico arquivo .pt.",
+      "fix": "Os arquivos foram reempacotados em um arquivo zip valido com o prefixo interno 'best/' preservado, restaurando o best.pt como um checkpoint carregavel via ultralytics.YOLO('best.pt').",
+      "verification": "Carregado com sucesso via YOLO('best.pt'); model.names retornou {0: 'Trash', 1: 'pothole'}."
+    }
+  },
+  "architecture": {
+    "pattern": "API REST com modelo carregado em memoria (singleton) + servico de notificacao por e-mail server-side",
+    "structure": {
+      "app/__init__.py": "marca o diretorio como pacote Python",
+      "app/main.py": "instancia FastAPI e define os endpoints /health, /predict e /report; concentra a logica de deteccao compartilhada (_run_detection) e de validacao de imagem (_load_image)",
+      "app/model.py": "carrega o modelo YOLO uma unica vez (singleton thread-safe com threading.Lock) e o mantem em memoria entre requisicoes",
+      "app/schemas.py": "modelos Pydantic: Detection, PredictionResponse, ReportData, ReportResponse",
+      "app/config.py": "le configuracao sensivel (token Mailtrap, e-mail/nome padrao da prefeitura) de variaveis de ambiente via python-dotenv; unico modulo que toca os.environ",
+      "app/email_service.py": "monta o e-mail HTML (com foto e logo embutidos via CID) e envia pela Mailtrap Send API",
+      "app/assets/logo.png": "logo da UrbanSense AI, embutido inline no e-mail de notificacao",
+      "best.pt": "pesos do modelo YOLO11 treinado (classes Trash e pothole)",
+      "requirements.txt": "dependencias Python do projeto",
+      ".env.example": "modelo de variaveis de ambiente (token Mailtrap, remetente, destinatario padrao); deve ser copiado para .env, que nunca e commitado",
+      "Dockerfile": "imagem Docker baseada em python:3.12-slim para rodar a API em qualquer maquina",
+      "docker-compose.yml": "orquestra o build e a execucao do container, expondo a porta 8000",
+      ".dockerignore": "evita copiar .venv, .git e cache para dentro da imagem Docker",
+      ".gitignore": "ignora .venv, __pycache__, arquivos .pyc e o .env real no controle de versao"
+    }
+  },
+  "model_loading_logic": {
+    "location": "app/model.py",
+    "pattern": "singleton com double-checked locking",
+    "steps": [
+      "MODEL_PATH aponta para best.pt na raiz do projeto, resolvido de forma relativa via Path(__file__), sem depender de caminho fixo de maquina",
+      "get_model() verifica se _model global ja foi carregado",
+      "se nao, adquire threading.Lock() para evitar carregar o modelo duas vezes em requisicoes concorrentes",
+      "carrega YOLO(str(MODEL_PATH)) uma unica vez e reutiliza em todas as chamadas seguintes, evitando custo de I/O e inicializacao do modelo a cada requisicao"
+    ]
+  },
+  "detection_logic": {
+    "location": "app/main.py",
+    "shared_helpers": {
+      "_load_image(raw, content_type)": "valida content-type contra ALLOWED_CONTENT_TYPES (retorna 415 se invalido) e abre os bytes com PIL.Image, convertendo para RGB (retorna 400 se o arquivo nao for uma imagem valida)",
+      "_run_detection(image, confidence)": "obtem o modelo singleton, roda model.predict(image, conf=confidence, verbose=False), extrai label/confidence/box de cada deteccao e calcula has_trash / has_pothole; usado tanto por /predict quanto por /report para nao divergir o resultado entre as duas rotas"
+    },
+    "label_matrix": {
+      "description": "app/main.py:_DETECTION_LABELS mapeia (has_trash, has_pothole) para um rotulo textual e uma frase de feedback de voz, usados na resposta de /report",
+      "combinations": {
+        "true_true": { "label": "DESCARTE DE LIXO E BURACO NA VIA", "audio_feedback": "Atenção: Descarte irregular de lixo e buraco na pista detectados!" },
+        "true_false": { "label": "DESCARTE DE LIXO DETECTADO", "audio_feedback": "Descarte irregular de lixo identificado na via." },
+        "false_true": { "label": "BURACO NA VIA DETECTADO", "audio_feedback": "Atenção: Buraco na pista detectado." },
+        "false_false": { "label": null, "audio_feedback": "Vistoria concluída. Nenhum problema urbano detectado." }
+      }
+    }
+  },
+  "api": {
+    "framework": "FastAPI",
+    "server": "Uvicorn (ASGI)",
+    "endpoints": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "description": "verifica se a API esta no ar",
+        "response_example": { "status": "ok" }
+      },
+      {
+        "method": "POST",
+        "path": "/predict",
+        "description": "deteccao pura, sem efeito colateral de notificacao. Mantida para qualquer chamador que so quer o resultado do YOLO (ex: analise em lote, outro cliente).",
+        "request": {
+          "content_type": "multipart/form-data",
+          "parameters": [
+            {
+              "name": "file",
+              "type": "UploadFile",
+              "required": true,
+              "allowed_content_types": ["image/jpeg", "image/png", "image/webp", "image/bmp"],
+              "validation": "retorna HTTP 415 se o content-type nao for permitido; retorna HTTP 400 se o arquivo nao puder ser aberto como imagem valida (PIL.Image.open)"
+            },
+            {
+              "name": "confidence",
+              "type": "float",
+              "required": false,
+              "default": 0.25,
+              "range": "0.0 a 1.0",
+              "location": "query string",
+              "description": "limiar minimo de confianca das deteccoes retornadas pelo modelo"
+            }
+          ]
+        },
+        "response_schema": {
+          "has_trash": "bool",
+          "has_pothole": "bool",
+          "detections": [
+            {
+              "label": "string",
+              "confidence": "float (0 a 1)",
+              "box": "[x1, y1, x2, y2] em pixels, coordenadas absolutas na imagem original"
+            }
+          ]
+        },
+        "response_example": {
+          "has_trash": true,
+          "has_pothole": false,
+          "detections": [
+            { "label": "Trash", "confidence": 0.87, "box": [12.3, 45.1, 300.2, 210.9] }
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/report",
+        "description": "deteccao + notificacao ao cidadao/prefeitura em uma unica chamada. E a rota que o app Android chama em cada captura: roda o YOLO na foto e envia um e-mail (via Mailtrap) para a prefeitura com a mesma foto anexada e os metadados de GPS/deteccao. O token do Mailtrap fica so no servidor, o app nunca tem acesso a ele.",
+        "request": {
+          "content_type": "multipart/form-data",
+          "parameters": [
+            { "name": "file", "type": "UploadFile", "required": true, "description": "mesma validacao de /predict (content-type e imagem valida)" },
+            { "name": "latitude", "type": "float", "required": true, "location": "form" },
+            { "name": "longitude", "type": "float", "required": true, "location": "form" },
+            { "name": "accuracy", "type": "float | null", "required": false, "location": "form", "description": "precisao do sinal GPS em metros" },
+            { "name": "timestamp", "type": "string | null", "required": false, "location": "form", "description": "timestamp ISO 8601 do momento da captura" },
+            { "name": "trigger_type", "type": "string", "required": false, "default": "MANUAL", "location": "form", "description": "'MANUAL' ou 'AUTOMATIC', usado para gerar o rotulo 'Captura manual'/'Captura automática' no e-mail" },
+            { "name": "device_id", "type": "string | null", "required": false, "location": "form" },
+            { "name": "to_email", "type": "string | null", "required": false, "location": "form", "description": "sobrescreve o destinatario padrao (config.DEFAULT_CITY_HALL_EMAIL) para esta chamada" },
+            { "name": "confidence", "type": "float", "required": false, "default": 0.25, "location": "query string" }
+          ]
+        },
+        "processing_logic": [
+          "valida e abre a imagem (mesma logica de /predict)",
+          "roda _run_detection; se a deteccao falhar/lancar excecao, o erro e engolido e detection_result fica None — o detector indisponivel nao pode bloquear a notificacao a prefeitura",
+          "resolve o rotulo e o audio_feedback de deteccao via _DETECTION_LABELS",
+          "gera report_id (rep_ + uuid4 hex) e created_at (UTC ISO 8601)",
+          "resolve o destinatario: to_email do form, ou config.DEFAULT_CITY_HALL_EMAIL como fallback",
+          "monta ReportEmailData e chama send_report_email, anexando a foto original e o logo da UrbanSense inline (via Content-ID)",
+          "se o e-mail for enviado com sucesso: responde 200 com status success e audio_feedback final mencionando o nome da prefeitura",
+          "se o envio do e-mail falhar: responde 502 com status error e code EMAIL_FAILED — falha no e-mail e tratada como erro real, pois e a etapa que o cidadao efetivamente precisa ver concluida"
+        ],
+        "response_shape_note": "o formato de ReportResponse foi desenhado para bater com o parser ja existente no app Android (NativeHttpDispatcher.parseSubmissionResponse), entao nao exigiu mudanca no cliente para a rota ser adicionada",
+        "response_schema": {
+          "status": "'success' | 'error'",
+          "message": "string | null",
+          "code": "string | null (ex: '200', 'EMAIL_FAILED')",
+          "audio_feedback": "string | null — texto pronto para leitura em voz alta no app",
+          "detection_result": "string | null — rotulo textual da deteccao (ex: 'DESCARTE DE LIXO DETECTADO')",
+          "data": {
+            "report_id": "string",
+            "created_at": "string (ISO 8601 UTC)",
+            "status": "string (ex: 'QUEUED')",
+            "thumbnail_url": "string | null",
+            "audio_feedback": "string | null",
+            "detection_result": "string | null"
+          }
+        },
+        "response_example_success": {
+          "status": "success",
+          "code": "200",
+          "message": "Ocorrência processada e notificada à prefeitura.",
+          "audio_feedback": "Descarte irregular de lixo identificado na via. E-mail enviado para a Prefeitura Municipal de Surubim.",
+          "detection_result": "DESCARTE DE LIXO DETECTADO",
+          "data": {
+            "report_id": "rep_3f9a...",
+            "created_at": "2026-08-21T14:05:00Z",
+            "status": "QUEUED",
+            "audio_feedback": "Descarte irregular de lixo identificado na via. E-mail enviado para a Prefeitura Municipal de Surubim.",
+            "detection_result": "DESCARTE DE LIXO DETECTADO"
+          }
+        },
+        "response_example_error": {
+          "status": "error",
+          "code": "EMAIL_FAILED",
+          "message": "Falha ao enviar e-mail via Mailtrap: <detalhe do erro>",
+          "audio_feedback": "Falha ao enviar e-mail. Registro salvo localmente.",
+          "detection_result": "DESCARTE DE LIXO DETECTADO"
+        }
+      }
+    ]
+  },
+  "email_service": {
+    "location": "app/email_service.py",
+    "provider": "Mailtrap Send API",
+    "why_server_side": "o token da Mailtrap era guardado no SharedPreferences do app Android, extraivel via 'adb backup' ou dispositivo rooteado; movido para o servidor, o token nunca chega ao cliente",
+    "email_content": [
+      "template HTML baseado em tabelas (compatibilidade com motores de renderizacao de clientes de e-mail, nao um navegador)",
+      "logo e foto da ocorrencia embutidos inline via Content-ID (CID), nao como link externo",
+      "fonte do sistema (San Francisco/Segoe UI/Roboto conforme o cliente), sem depender de web font que a maioria dos clientes de e-mail bloqueia",
+      "bloco de metadados: deteccao da IA, data/hora, coordenadas GPS, precisao do sinal, tipo de captura, dispositivo, ID do registro",
+      "link para o mapa (OpenStreetMap) centrado nas coordenadas da ocorrencia"
+    ],
+    "send_report_email": {
+      "guard_clause": "retorna falha imediata (sem chamar a API) se MAILTRAP_API_TOKEN ou to_email nao estiverem configurados",
+      "request": "POST para config.MAILTRAP_API_URL com JSON contendo from/to/subject/html/attachments (foto + logo em base64), header Api-Token, timeout de 20s",
+      "error_handling": "excecoes de rede (requests.RequestException) sao capturadas e retornadas como EmailResult(success=False)"
+    }
+  },
+  "configuration": {
+    "location": "app/config.py",
+    "loading": "python-dotenv le .env no diretorio de trabalho (no-op em producao, onde o host injeta as variaveis de ambiente diretamente)",
+    "variables": {
+      "MAILTRAP_API_URL": "default: https://send.api.mailtrap.io/api/send",
+      "MAILTRAP_API_TOKEN": "obrigatorio para /report enviar e-mail; sem valor default, vazio por padrao",
+      "MAILTRAP_SENDER_EMAIL": "default: relatos@urbansense.ai",
+      "MAILTRAP_SENDER_NAME": "default: UrbanSense AI",
+      "DEFAULT_CITY_HALL_EMAIL": "default: ouvidoria@surubim.pe.gov.br",
+      "DEFAULT_CITY_HALL_NAME": "default: Prefeitura Municipal de Surubim"
+    },
+    "setup": "copiar .env.example para .env e preencher MAILTRAP_API_TOKEN (gerado em mailtrap.io/api-tokens); .env nunca deve ser commitado"
+  },
+  "dependencies": {
+    "fastapi": "framework web para definicao dos endpoints e validacao via Pydantic",
+    "uvicorn[standard]": "servidor ASGI usado para rodar a aplicacao (inclui httptools, websockets, watchfiles)",
+    "python-multipart": "necessario para o FastAPI processar uploads multipart/form-data",
+    "ultralytics": "biblioteca oficial do YOLO, usada para carregar o modelo e rodar inferencia",
+    "torch / torchvision": "instalados automaticamente como dependencia do ultralytics; motor de inferencia do modelo",
+    "pillow (PIL)": "abertura e conversao das imagens recebidas antes da inferencia",
+    "requests": "usado por app/email_service.py para chamar a Mailtrap Send API",
+    "python-dotenv": "usado por app/config.py para carregar variaveis do arquivo .env em desenvolvimento local"
+  },
+  "deployment": {
+    "local_dev": {
+      "steps": [
+        "criar ambiente virtual: python -m venv .venv",
+        "instalar dependencias: pip install -r requirements.txt",
+        "copiar .env.example para .env e preencher MAILTRAP_API_TOKEN",
+        "rodar: uvicorn app.main:app --reload"
+      ],
+      "url": "http://127.0.0.1:8000",
+      "docs_url": "http://127.0.0.1:8000/docs"
+    },
+    "render": {
+      "build_command": "pip install -r requirements.txt",
+      "start_command": "uvicorn app.main:app --host 0.0.0.0 --port $PORT",
+      "notes": "Render injeta a porta via variavel de ambiente PORT; o host precisa ser 0.0.0.0 para aceitar conexoes externas; --reload nao deve ser usado em producao. As variaveis MAILTRAP_* e DEFAULT_CITY_HALL_* devem ser configuradas no painel do Render (Environment), nao via .env."
+    },
+    "docker": {
+      "base_image": "python:3.12-slim",
+      "system_dependencies": ["libgl1", "libglib2.0-0"],
+      "system_dependencies_reason": "exigidas pelo opencv-python, dependencia transitiva do ultralytics",
+      "exposed_port": 8000,
+      "start_command_in_container": "uvicorn app.main:app --host 0.0.0.0 --port 8000",
+      "compose_command": "docker compose up -d --build",
+      "compose_port_mapping": "8000:8000",
+      "use_case": "subir a API em qualquer maquina externa com Docker instalado, fora do Render",
+      "env_vars_note": "as variaveis MAILTRAP_*/DEFAULT_CITY_HALL_* precisam ser passadas ao container (ex: via 'env_file: .env' no docker-compose.yml ou 'environment:'), o Dockerfile atual nao copia o .env para dentro da imagem"
+    }
+  },
+  "known_notes": [
+    "O modelo e carregado apenas uma vez em memoria (singleton), entao o primeiro request apos subir o servidor e mais lento (cold start); os seguintes sao rapidos.",
+    "torch e ultralytics sao dependencias pesadas (varias centenas de MB); pode ser necessario ajustar planos free de hospedagem (ex: Render) por limite de build/disco.",
+    "Nao ha autenticacao nem rate limiting implementados nas rotas ate o momento.",
+    "Nao ha limite explicito de tamanho de upload de imagem implementado ate o momento.",
+    "Em /report, falha na deteccao YOLO nao bloqueia a notificacao (o registro segue com detection_result=null), mas falha no envio do e-mail retorna erro 502 — a notificacao a prefeitura e o passo considerado critico para o cidadao.",
+    "O .env real nunca deve ser commitado; .env.example serve apenas de modelo."
+  ]
+}
