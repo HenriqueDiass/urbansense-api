@@ -17,5 +17,5 @@ MAILTRAP_API_TOKEN = os.environ.get("MAILTRAP_API_TOKEN", "")
 MAILTRAP_SENDER_EMAIL = os.environ.get("MAILTRAP_SENDER_EMAIL", "relatos@urbansense.ai")
 MAILTRAP_SENDER_NAME = os.environ.get("MAILTRAP_SENDER_NAME", "UrbanSense AI")
 
-DEFAULT_CITY_HALL_EMAIL = os.environ.get("DEFAULT_CITY_HALL_EMAIL", "ouvidoria@surubim.pe.gov.br")
+DEFAULT_CITY_HALL_EMAIL = os.environ.get("DEFAULT_CITY_HALL_EMAIL", "marcio.flima@upe.br")
 DEFAULT_CITY_HALL_NAME = os.environ.get("DEFAULT_CITY_HALL_NAME", "Prefeitura Municipal de Surubim")
